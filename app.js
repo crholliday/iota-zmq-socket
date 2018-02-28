@@ -3,7 +3,7 @@ const config = require('./config')
 const app = require('express')()
 const server = require('http').Server(app)
 const io = require('socket.io')(server)
-const zmq = require('zeromq')
+const zmq = require('zeromq-ng')
 
 const maxSeconds = 5
 let interval = 0
@@ -19,32 +19,48 @@ app.get('/', function (req, res) {
 })
 
 io.on('connection', (socket) => {
-    socket.emit('info', {hello: 'world'})
-    let sock = zmq.socket('sub')
 
+    const sock = new zmq.Subscriber
+    sock.receiveTimeout = config.zmq_retry_interval
+    
     sock.connect('tcp://' + config.zmq_url)
     sock.subscribe('')
-
-    console.info('Subscriber connected to port 5556')
-
-    sock.on('message', function(topic) {
-        let arr = topic.toString().split(' ')
-        socket.emit('msg', arr)
-        counter++
-    })
-
-    setInterval(() => {
-        if (interval === counter) {
-            attempts++
-            console.log('Closing the sockets due to inactivity for ', maxSeconds, ' seconds')
-            console.log('Attempt #: ', attempts)
-            sock.disconnect('tcp://' + config.zmq_url)
-            sock.connect('tcp://' + config.zmq_url)
-            sock.subscribe('')
-
-        } else {
-            interval = counter
+    console.log('Subscriber connected to port 5556')
+    
+    async function run() {
+        while (!sock.closed) {
+            try {
+                const [topic, msg] = await sock.receive()
+                let arr = topic.toString().split(' ')
+                socket.emit('msg', arr)
+                counter++
+            } catch (e) {
+                if (e.code === 'EAGAIN') {
+                    console.log('ZMQ messaging timed out. Attempting to reconnect')
+                    sock.disconnect('tcp://' + config.zmq_url)
+                    sock.connect('tcp://' + config.zmq_url)
+                    sock.subscribe
+                } else {
+                    console.log('An unhandled exception has occurred: ', e)
+                }
+            }
         }
-    }, maxSeconds * 1000)
-})
+      }
 
+      run()
+
+    // setInterval(() => {
+    //     if (interval === counter) {
+    //         attempts++
+    //         console.log('Closing the sockets due to inactivity for ', maxSeconds, ' seconds')
+    //         console.log('Attempt #: ', attempts)
+    //         sock.disconnect('tcp://' + config.zmq_url)
+    //         sock.connect('tcp://' + config.zmq_url)
+    //         sock.subscribe('')
+
+    //     } else {
+    //         interval = counter
+    //     }
+    // }, maxSeconds * 1000)
+
+})
